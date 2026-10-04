@@ -1327,6 +1327,262 @@ ViewTab:CreateButton({
 	end,
 })
 
+local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
+
+local ServerTab = Window:CreateTab("Server", 4483362458)
+
+local DEFAULT_SCRIPT_URL = "https://raw.githubusercontent.com/gyeongjuping/bunhwaga/refs/heads/main/text.txt"
+
+local ServerHop = {
+	Mode = "인원 적은 서버",
+	MinPlayers = 1,
+	Busy = false,
+	AutoReload = true,
+	ScriptURL = DEFAULT_SCRIPT_URL,
+}
+
+local queueFn = (syn and syn.queue_on_teleport)
+	or queue_on_teleport
+	or (fluxus and fluxus.queue_on_teleport)
+
+local function queueReload()
+	if not ServerHop.AutoReload then return end
+
+	if not queueFn then
+		Rayfield:Notify({
+			Title = "Server Hop",
+			Content = "이 실행기는 자동 재실행을 지원하지 않음",
+			Duration = 4,
+		})
+		return
+	end
+
+	if ServerHop.ScriptURL == "" then
+		Rayfield:Notify({
+			Title = "Server Hop",
+			Content = "스크립트 URL이 없어 자동 재실행 불가",
+			Duration = 4,
+		})
+		return
+	end
+
+	pcall(function()
+		queueFn(string.format("loadstring(game:HttpGet(%q))()", ServerHop.ScriptURL))
+	end)
+end
+
+local function httpGet(url)
+	local ok, res = pcall(function()
+		return game:HttpGet(url)
+	end)
+	if ok and res then return res end
+
+	local req = (syn and syn.request) or request or http_request
+	if req then
+		local ok2, r = pcall(function()
+			return req({ Url = url, Method = "GET" })
+		end)
+		if ok2 and r and r.Body then
+			return r.Body
+		end
+	end
+	return nil
+end
+
+local function fetchServers()
+	local list = {}
+	local cursor = ""
+
+	for _ = 1, 3 do
+		local url = string.format(
+			"https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100%s",
+			game.PlaceId,
+			cursor ~= "" and ("&cursor=" .. cursor) or ""
+		)
+		local body = httpGet(url)
+		if not body then break end
+
+		local ok, data = pcall(function()
+			return HttpService:JSONDecode(body)
+		end)
+		if not ok or type(data) ~= "table" or type(data.data) ~= "table" then break end
+
+		for _, srv in ipairs(data.data) do
+			table.insert(list, srv)
+		end
+
+		if data.nextPageCursor then
+			cursor = data.nextPageCursor
+		else
+			break
+		end
+	end
+
+	return list
+end
+
+local function pickServer(list)
+	local candidates = {}
+	for _, srv in ipairs(list) do
+		if srv.id ~= game.JobId
+			and type(srv.playing) == "number"
+			and type(srv.maxPlayers) == "number"
+			and srv.playing < srv.maxPlayers - 1
+			and srv.playing >= ServerHop.MinPlayers then
+			table.insert(candidates, srv)
+		end
+	end
+
+	if #candidates == 0 then return nil end
+
+	if ServerHop.Mode == "인원 적은 서버" then
+		table.sort(candidates, function(a, b) return a.playing < b.playing end)
+	elseif ServerHop.Mode == "인원 많은 서버" then
+		table.sort(candidates, function(a, b) return a.playing > b.playing end)
+	elseif ServerHop.Mode == "핑 낮은 서버" then
+		table.sort(candidates, function(a, b)
+			return (a.ping or 9999) < (b.ping or 9999)
+		end)
+	else
+		return candidates[math.random(1, #candidates)]
+	end
+
+	return candidates[1]
+end
+
+local function doHop()
+	if ServerHop.Busy then return end
+	ServerHop.Busy = true
+
+	Rayfield:Notify({
+		Title = "Server Hop",
+		Content = "서버 목록을 불러오는 중...",
+		Duration = 2,
+	})
+
+	local list = fetchServers()
+	if #list == 0 then
+		Rayfield:Notify({
+			Title = "Server Hop",
+			Content = "서버 목록을 불러오지 못함",
+			Duration = 3,
+		})
+		ServerHop.Busy = false
+		return
+	end
+
+	local pick = pickServer(list)
+	if not pick then
+		Rayfield:Notify({
+			Title = "Server Hop",
+			Content = "조건에 맞는 서버가 없음",
+			Duration = 3,
+		})
+		ServerHop.Busy = false
+		return
+	end
+
+	Rayfield:Notify({
+		Title = "Server Hop",
+		Content = string.format("이동 중... (%d/%d명, 핑 %s)", pick.playing, pick.maxPlayers, tostring(pick.ping or "?")),
+		Duration = 3,
+	})
+
+	queueReload()
+
+	local ok = pcall(function()
+		TeleportService:TeleportToPlaceInstance(game.PlaceId, pick.id, player)
+	end)
+
+	if not ok then
+		Rayfield:Notify({
+			Title = "Server Hop",
+			Content = "이동 실패",
+			Duration = 3,
+		})
+	end
+
+	task.delay(5, function()
+		ServerHop.Busy = false
+	end)
+end
+
+ServerTab:CreateParagraph({
+	Title = "안내",
+	Content = "현재 서버를 제외하고 조건에 맞는 서버로 이동\n자리가 꽉 찬 서버는 제외",
+})
+
+ServerTab:CreateDropdown({
+	Name = "이동할 서버 기준",
+	Options = { "인원 적은 서버", "핑 낮은 서버", "인원 많은 서버", "랜덤" },
+	CurrentOption = { "인원 적은 서버" },
+	MultipleOptions = false,
+	Flag = "HopMode",
+	Callback = function(selected)
+		local mode = selected
+		if type(selected) == "table" then
+			mode = selected[1]
+		end
+		if mode then
+			ServerHop.Mode = mode
+		end
+	end,
+})
+
+ServerTab:CreateSlider({
+	Name = "최소 인원",
+	Range = {0, 15},
+	Increment = 1,
+	Suffix = "명",
+	CurrentValue = 1,
+	Flag = "HopMinPlayers",
+	Callback = function(v) ServerHop.MinPlayers = v end,
+})
+
+ServerTab:CreateSection("자동 재실행")
+
+ServerTab:CreateToggle({
+	Name = "서버 이동 후 스크립트 자동 실행",
+	CurrentValue = true,
+	Flag = "HopAutoReload",
+	Callback = function(v) ServerHop.AutoReload = v end,
+})
+
+ServerTab:CreateInput({
+	Name = "스크립트 URL (raw 링크)",
+	PlaceholderText = DEFAULT_SCRIPT_URL,
+	RemoveTextAfterFocusLost = false,
+	Flag = "HopScriptURL",
+	Callback = function(text)
+		text = tostring(text or "")
+		if text == "" then
+			ServerHop.ScriptURL = DEFAULT_SCRIPT_URL
+		else
+			ServerHop.ScriptURL = text
+		end
+	end,
+})
+
+ServerTab:CreateSection("이동")
+
+ServerTab:CreateButton({
+	Name = "서버 이동",
+	Callback = function()
+		task.spawn(doHop)
+	end,
+})
+
+ServerTab:CreateButton({
+	Name = "현재 서버 재접속",
+	Callback = function()
+		queueReload()
+		pcall(function()
+			TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, player)
+		end)
+	end,
+})
+
 local CreditsTab = Window:CreateTab("Credits", 4483362458)
 
 CreditsTab:CreateParagraph({
