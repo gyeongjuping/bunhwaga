@@ -1,0 +1,1347 @@
+local ALLOWED_GAME_ID = 3340519030
+
+if game.GameId ~= ALLOWED_GAME_ID and game.PlaceId ~= ALLOWED_GAME_ID then
+	local lp = game:GetService("Players").LocalPlayer
+	lp:Kick("번화가돌기전용")
+	return
+end
+
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Teams = game:GetService("Teams")
+local PathfindingService = game:GetService("PathfindingService")
+local Workspace = game:GetService("Workspace")
+local CoreGui = game:GetService("CoreGui")
+
+local player = Players.LocalPlayer
+
+local autoFarm = false
+local totalEarned = 0
+local lastMoney = 0
+local scriptStartTime = os.time()
+local logs = {}
+local MAX_LOGS = 20
+
+if player:FindFirstChild("leaderstats") and player.leaderstats:FindFirstChild("Money") then
+	lastMoney = player.leaderstats.Money.Value
+end
+
+local Window = Rayfield:CreateWindow({
+	Name = "번화가돌기 GUI",
+	LoadingTitle = "로딩 중...",
+	LoadingSubtitle = "by 서쫀쿠",
+	Theme = "Default",
+	ConfigurationSaving = {
+		Enabled = true,
+		FolderName = "BunhwagaGUI",
+		FileName = "Config",
+	},
+})
+
+local MainTab = Window:CreateTab("Main", 4483362458)
+
+local MoneyLabel   = MainTab:CreateLabel("돈: 로딩중...")
+local JobLabel     = MainTab:CreateLabel("직업: 로딩중...")
+local TimeLabel    = MainTab:CreateLabel("적용 시간: 0분 0초")
+local EarnedLabel  = MainTab:CreateLabel("총 수익: 0")
+
+local LogParagraph
+
+local function addLog(amount)
+	if not LogParagraph then return end
+	local timeStr = os.date("%H:%M:%S")
+	table.insert(logs, 1, string.format("[%s] +%s원", timeStr, tostring(amount)))
+
+	if #logs > MAX_LOGS then
+		table.remove(logs)
+	end
+
+	LogParagraph:Set({
+		Title = "잔액 변동 기록",
+		Content = table.concat(logs, "\n"),
+	})
+end
+
+local function updateTimeLabel()
+	local elapsed = os.time() - scriptStartTime
+	local minutes = math.floor(elapsed / 60)
+	local seconds = elapsed % 60
+	TimeLabel:Set(string.format("적용 시간: %d분 %d초", minutes, seconds))
+end
+
+task.spawn(function()
+	while true do
+		local currentMoney = 0
+		if player:FindFirstChild("leaderstats") and player.leaderstats:FindFirstChild("Money") then
+			currentMoney = player.leaderstats.Money.Value
+		end
+		MoneyLabel:Set("돈: " .. tostring(currentMoney))
+
+		if currentMoney > lastMoney then
+			local gained = currentMoney - lastMoney
+			totalEarned = totalEarned + gained
+			EarnedLabel:Set("총 수익: " .. tostring(totalEarned))
+
+			Rayfield:Notify({
+				Title = "잔액 변동 알림",
+				Content = "+" .. tostring(gained) .. "원",
+				Duration = 3,
+			})
+
+			addLog(gained)
+		end
+		lastMoney = currentMoney
+
+		local jobText = "없음"
+		if player:FindFirstChild("leaderstats") and player.leaderstats:FindFirstChild("Job") then
+			jobText = tostring(player.leaderstats.Job.Value)
+		elseif player.Team then
+			jobText = player.Team.Name
+		end
+
+		if string.find(jobText, " \\ ") then
+			jobText = string.split(jobText, " \\ ")[1]
+		elseif string.find(jobText, "ㅣ") then
+			jobText = string.split(jobText, "ㅣ")[1]
+		elseif string.find(jobText, " | ") then
+			jobText = string.split(jobText, " | ")[1]
+		end
+		jobText = string.gsub(jobText, "^%s*(.-)%s*$", "%1")
+		JobLabel:Set("직업: " .. jobText)
+
+		updateTimeLabel()
+
+		task.wait(0.3)
+	end
+end)
+
+MainTab:CreateToggle({
+	Name = "오토팜",
+	CurrentValue = false,
+	Callback = function(Value)
+		autoFarm = Value
+
+		if Value then
+			Rayfield:Notify({
+				Title = "오토팜 활성화 알림",
+				Content = "오토팜이 활성화되었습니다.",
+				Duration = 2,
+			})
+
+			task.spawn(function()
+				while autoFarm do
+					local event = ReplicatedStorage:FindFirstChild("DeliveryEvent")
+					if event then
+						event:FireServer()
+					end
+					task.wait(5)
+				end
+			end)
+		else
+			Rayfield:Notify({
+				Title = "오토팜 비활성화 알림",
+				Content = "오토팜이 비활성화되었습니다.",
+				Duration = 2,
+			})
+		end
+	end,
+})
+
+MainTab:CreateSection("Log")
+LogParagraph = MainTab:CreateParagraph({
+	Title = "잔액 변동 기록",
+	Content = "아직 기록이 없습니다.",
+})
+
+local BIKER_KEYS  = { "폭주족", "biker" }
+local POLICE_KEYS = { "경찰", "police" }
+
+local function inTeam(plr, keys)
+	local t = plr and plr.Team
+	if not t then return false end
+	local n = string.lower(t.Name)
+	for _, k in ipairs(keys) do
+		if string.find(n, k, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+local function teamColor(plr)
+	local t = plr.Team
+	if t and t.TeamColor then
+		return t.TeamColor.Color
+	end
+	return Color3.fromRGB(255, 255, 255)
+end
+
+local function getBounty(plr)
+	local ls = plr:FindFirstChild("leaderstats")
+	if not ls then return nil end
+	for _, v in ipairs(ls:GetChildren()) do
+		local n = string.lower(v.Name)
+		if string.find(n, "현상금", 1, true) or string.find(n, "bounty", 1, true) then
+			return v.Value
+		end
+	end
+	return nil
+end
+
+local function fmtNum(n)
+	if type(n) ~= "number" then return tostring(n) end
+	local str = tostring(math.floor(n))
+	local rev = string.reverse(str)
+	rev = string.gsub(rev, "(%d%d%d)", "%1,")
+	str = string.reverse(rev)
+	str = string.gsub(str, "^,", "")
+	return str
+end
+
+local guiRoot = (gethui and gethui()) or CoreGui
+local espFolder = Instance.new("Folder")
+espFolder.Name = "ESP_Folder"
+espFolder.Parent = guiRoot
+
+local ESPTab = Window:CreateTab("Police", 4483362458)
+local HitTab = ESPTab
+local PoliceTab = ESPTab
+ESPTab:CreateSection("ESP")
+
+local ESP = {
+	Enabled = false,
+	Highlight = true,
+	Names = true,
+	Distance = true,
+	Bounty = true,
+	MaxDistance = 3000,
+}
+
+local espObjects = {}
+
+local function removeESP(plr)
+	local obj = espObjects[plr]
+	if obj then
+		if obj.Highlight then obj.Highlight:Destroy() end
+		if obj.Billboard then obj.Billboard:Destroy() end
+		espObjects[plr] = nil
+	end
+end
+
+local function createESP(plr, char, root)
+	removeESP(plr)
+
+	local hl = Instance.new("Highlight")
+	hl.Name = "ESP_HL_" .. plr.Name
+	hl.Adornee = char
+	hl.FillTransparency = 0.5
+	hl.OutlineTransparency = 0
+	hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	hl.Enabled = false
+	hl.Parent = espFolder
+
+	local bb = Instance.new("BillboardGui")
+	bb.Name = "ESP_BB_" .. plr.Name
+	bb.Adornee = root
+	bb.Size = UDim2.new(0, 220, 0, 60)
+	bb.StudsOffset = Vector3.new(0, 4, 0)
+	bb.AlwaysOnTop = true
+	bb.Enabled = false
+	bb.Parent = espFolder
+
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Size = UDim2.new(1, 0, 1, 0)
+	label.Font = Enum.Font.GothamBold
+	label.TextSize = 14
+	label.TextStrokeTransparency = 0
+	label.Text = ""
+	label.Parent = bb
+
+	espObjects[plr] = { Highlight = hl, Billboard = bb, Label = label }
+	return espObjects[plr]
+end
+
+RunService.RenderStepped:Connect(function()
+	if not ESP.Enabled then return end
+
+	local myChar = player.Character
+	local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= player then
+			local char = plr.Character
+			local root = char and char:FindFirstChild("HumanoidRootPart")
+
+			if root and inTeam(plr, BIKER_KEYS) then
+				local obj = espObjects[plr]
+				if not obj or obj.Highlight.Adornee ~= char or obj.Billboard.Adornee ~= root then
+					obj = createESP(plr, char, root)
+				end
+
+				local dist = myRoot and (myRoot.Position - root.Position).Magnitude or 0
+				local visible = dist <= ESP.MaxDistance
+				local col = teamColor(plr)
+
+				obj.Highlight.FillColor = col
+				obj.Highlight.OutlineColor = col
+				obj.Highlight.Enabled = visible and ESP.Highlight
+				obj.Label.TextColor3 = col
+
+				local lines = {}
+				if ESP.Names then
+					table.insert(lines, plr.DisplayName)
+				end
+				if ESP.Bounty then
+					local b = getBounty(plr)
+					table.insert(lines, "현상금: " .. (b and fmtNum(b) or "?"))
+				end
+				if ESP.Distance then
+					table.insert(lines, string.format("[%d m]", dist))
+				end
+				obj.Label.Text = table.concat(lines, "\n")
+				obj.Billboard.Enabled = visible and #lines > 0
+			else
+				removeESP(plr)
+			end
+		end
+	end
+end)
+
+Players.PlayerRemoving:Connect(removeESP)
+
+ESPTab:CreateParagraph({
+	Title = "안내",
+	Content = "폭주족 팀만 표시됨\n이름/외곽선 색은 팀 색으로 자동 적용",
+})
+
+ESPTab:CreateToggle({
+	Name = "ESP 켜기",
+	CurrentValue = false,
+	Flag = "ESPEnabled",
+	Callback = function(v)
+		ESP.Enabled = v
+		if not v then
+			for plr in pairs(espObjects) do
+				removeESP(plr)
+			end
+		end
+	end,
+})
+
+ESPTab:CreateToggle({
+	Name = "하이라이트(외곽선)",
+	CurrentValue = true,
+	Flag = "ESPHighlight",
+	Callback = function(v) ESP.Highlight = v end,
+})
+
+ESPTab:CreateToggle({
+	Name = "이름 표시",
+	CurrentValue = true,
+	Flag = "ESPNames",
+	Callback = function(v) ESP.Names = v end,
+})
+
+ESPTab:CreateToggle({
+	Name = "현상금 표시",
+	CurrentValue = true,
+	Flag = "ESPBounty",
+	Callback = function(v) ESP.Bounty = v end,
+})
+
+ESPTab:CreateToggle({
+	Name = "거리 표시",
+	CurrentValue = true,
+	Flag = "ESPDistance",
+	Callback = function(v) ESP.Distance = v end,
+})
+
+ESPTab:CreateSlider({
+	Name = "최대 거리",
+	Range = {100, 5000},
+	Increment = 50,
+	Suffix = "m",
+	CurrentValue = 3000,
+	Flag = "ESPMaxDist",
+	Callback = function(v) ESP.MaxDistance = v end,
+})
+
+HitTab:CreateSection("Hitbox")
+
+local Hitbox = {
+	Enabled = false,
+	Size = 10,
+	Transparency = 0.6,
+	Visible = true,
+	Color = Color3.fromRGB(255, 255, 0),
+}
+
+local originalData = {}
+local hitVisuals = {}
+
+local function removeVisual(plr)
+	if hitVisuals[plr] then
+		hitVisuals[plr]:Destroy()
+		hitVisuals[plr] = nil
+	end
+end
+
+local function restoreHitbox(plr)
+	removeVisual(plr)
+	local data = originalData[plr]
+	if not data then return end
+	local char = plr.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if root then
+		pcall(function()
+			root.Size = data.Size
+			root.CanCollide = data.CanCollide
+			root.Massless = data.Massless
+		end)
+	end
+	originalData[plr] = nil
+end
+
+local function ensureVisual(plr, root)
+	local box = hitVisuals[plr]
+	if not box or not box.Parent or box.Adornee ~= root then
+		removeVisual(plr)
+		box = Instance.new("BoxHandleAdornment")
+		box.Name = "HB_" .. plr.Name
+		box.Adornee = root
+		box.AlwaysOnTop = true
+		box.ZIndex = 5
+		box.Parent = espFolder
+		hitVisuals[plr] = box
+	end
+	box.Size = root.Size
+	box.Color3 = Hitbox.Color
+	box.Transparency = Hitbox.Transparency
+	box.Visible = Hitbox.Visible
+end
+
+RunService.Heartbeat:Connect(function()
+	local active = Hitbox.Enabled and inTeam(player, POLICE_KEYS)
+
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= player then
+			local char = plr.Character
+			local root = char and char:FindFirstChild("HumanoidRootPart")
+
+			if root and active and inTeam(plr, BIKER_KEYS) then
+				if not originalData[plr] then
+					originalData[plr] = {
+						Size = root.Size,
+						CanCollide = root.CanCollide,
+						Massless = root.Massless,
+					}
+				end
+				pcall(function()
+					root.Size = Vector3.new(Hitbox.Size, Hitbox.Size, Hitbox.Size)
+					root.CanCollide = false
+					root.Massless = true
+				end)
+				ensureVisual(plr, root)
+			elseif originalData[plr] or hitVisuals[plr] then
+				restoreHitbox(plr)
+			end
+		end
+	end
+end)
+
+Players.PlayerRemoving:Connect(function(plr)
+	removeVisual(plr)
+	originalData[plr] = nil
+end)
+
+HitTab:CreateParagraph({
+	Title = "안내",
+	Content = "내가 경찰팀일 때만 작동\n대상은 폭주족팀 (테이저용)",
+})
+
+HitTab:CreateToggle({
+	Name = "히트박스 확장",
+	CurrentValue = false,
+	Flag = "HitboxEnabled",
+	Callback = function(v)
+		Hitbox.Enabled = v
+		if v and not inTeam(player, POLICE_KEYS) then
+			Rayfield:Notify({
+				Title = "히트박스",
+				Content = "경찰팀이 아니라서 경찰로 바꿔야 가능.",
+				Duration = 3,
+			})
+		end
+		if not v then
+			for _, plr in ipairs(Players:GetPlayers()) do
+				restoreHitbox(plr)
+			end
+		end
+	end,
+})
+
+HitTab:CreateToggle({
+	Name = "히트박스 눈에 보이게",
+	CurrentValue = true,
+	Flag = "HitboxVisible",
+	Callback = function(v) Hitbox.Visible = v end,
+})
+
+HitTab:CreateSlider({
+	Name = "히트박스 크기",
+	Range = {2, 50},
+	Increment = 1,
+	Suffix = "studs",
+	CurrentValue = 10,
+	Flag = "HitboxSize",
+	Callback = function(v) Hitbox.Size = v end,
+})
+
+HitTab:CreateSlider({
+	Name = "투명도 (높을수록 흐림)",
+	Range = {0, 1},
+	Increment = 0.05,
+	Suffix = "",
+	CurrentValue = 0.6,
+	Flag = "HitboxTransparency",
+	Callback = function(v) Hitbox.Transparency = v end,
+})
+
+HitTab:CreateColorPicker({
+	Name = "히트박스 색상",
+	Color = Hitbox.Color,
+	Flag = "HitboxColor",
+	Callback = function(v) Hitbox.Color = v end,
+})
+
+local MapTab = Window:CreateTab("GPS", 4483362458)
+
+local GPS = {
+	Enabled = false,
+	TargetName = nil,
+	ShowPath = true,
+	Waypoints = {},
+}
+
+local gpsGui = Instance.new("ScreenGui")
+gpsGui.Name = "GPS_GUI"
+gpsGui.ResetOnSpawn = false
+gpsGui.IgnoreGuiInset = true
+gpsGui.Enabled = false
+gpsGui.Parent = guiRoot
+
+local arrow = Instance.new("TextLabel")
+arrow.BackgroundTransparency = 1
+arrow.AnchorPoint = Vector2.new(0.5, 0.5)
+arrow.Position = UDim2.new(0.5, 0, 0.2, 0)
+arrow.Size = UDim2.fromOffset(80, 80)
+arrow.Font = Enum.Font.GothamBold
+arrow.Text = "▲"
+arrow.TextSize = 64
+arrow.TextColor3 = Color3.fromRGB(0, 200, 255)
+arrow.TextStrokeTransparency = 0
+arrow.Parent = gpsGui
+
+local infoLabel = Instance.new("TextLabel")
+infoLabel.BackgroundTransparency = 1
+infoLabel.AnchorPoint = Vector2.new(0.5, 0)
+infoLabel.Position = UDim2.new(0.5, 0, 0.2, 45)
+infoLabel.Size = UDim2.fromOffset(300, 40)
+infoLabel.Font = Enum.Font.GothamBold
+infoLabel.TextSize = 16
+infoLabel.TextColor3 = Color3.new(1, 1, 1)
+infoLabel.TextStrokeTransparency = 0
+infoLabel.Text = ""
+infoLabel.Parent = gpsGui
+
+local pathDots = {}
+
+local function clearDots()
+	for _, d in ipairs(pathDots) do
+		d:Destroy()
+	end
+	pathDots = {}
+end
+
+local function drawDots(points)
+	clearDots()
+	if not GPS.ShowPath then return end
+	local step = math.max(1, math.ceil(#points / 60))
+	for i = 1, #points, step do
+		local dot = Instance.new("SphereHandleAdornment")
+		dot.Adornee = Workspace.Terrain
+		dot.CFrame = CFrame.new(points[i] + Vector3.new(0, 1.5, 0))
+		dot.Radius = 0.6
+		dot.Color3 = Color3.fromRGB(0, 200, 255)
+		dot.Transparency = 0.2
+		dot.AlwaysOnTop = true
+		dot.ZIndex = 3
+		dot.Parent = espFolder
+		table.insert(pathDots, dot)
+	end
+end
+
+local function getTarget()
+	if not GPS.TargetName then return nil end
+	local plr = Players:FindFirstChild(GPS.TargetName)
+	local char = plr and plr.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	return plr, root
+end
+
+task.spawn(function()
+	while true do
+		task.wait(2)
+		if GPS.Enabled then
+			local plr, targetRoot = getTarget()
+			local myChar = player.Character
+			local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+
+			if targetRoot and myRoot then
+				local pts = {}
+				local ok = pcall(function()
+					local path = PathfindingService:CreatePath({
+						AgentRadius = 2,
+						AgentHeight = 5,
+						AgentCanJump = true,
+					})
+					path:ComputeAsync(myRoot.Position, targetRoot.Position)
+					if path.Status == Enum.PathStatus.Success then
+						for _, wp in ipairs(path:GetWaypoints()) do
+							table.insert(pts, wp.Position)
+						end
+					end
+				end)
+				if ok and #pts > 0 then
+					GPS.Waypoints = pts
+					drawDots(pts)
+				else
+					GPS.Waypoints = {}
+					clearDots()
+				end
+			else
+				GPS.Waypoints = {}
+				clearDots()
+			end
+		end
+	end
+end)
+
+RunService.RenderStepped:Connect(function()
+	if not GPS.Enabled then return end
+
+	local plr, targetRoot = getTarget()
+	local myChar = player.Character
+	local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+	local cam = Workspace.CurrentCamera
+
+	if not (plr and targetRoot and myRoot and cam) then
+		infoLabel.Text = "대상을 찾을 수 없음"
+		return
+	end
+
+	local aim = targetRoot.Position
+	for _, pos in ipairs(GPS.Waypoints) do
+		local flatDiff = Vector3.new(pos.X - myRoot.Position.X, 0, pos.Z - myRoot.Position.Z)
+		if flatDiff.Magnitude > 8 then
+			aim = pos
+			break
+		end
+	end
+
+	local dir = Vector3.new(aim.X - myRoot.Position.X, 0, aim.Z - myRoot.Position.Z)
+	local look = Vector3.new(cam.CFrame.LookVector.X, 0, cam.CFrame.LookVector.Z)
+	local right = Vector3.new(cam.CFrame.RightVector.X, 0, cam.CFrame.RightVector.Z)
+
+	if dir.Magnitude > 0.1 and look.Magnitude > 0.01 and right.Magnitude > 0.01 then
+		dir = dir.Unit
+		look = look.Unit
+		right = right.Unit
+		arrow.Rotation = math.deg(math.atan2(dir:Dot(right), dir:Dot(look)))
+	end
+
+	local total = (targetRoot.Position - myRoot.Position).Magnitude
+	infoLabel.Text = string.format("%s  [%d m]", plr.DisplayName, total)
+end)
+
+local function getPlayerNames()
+	local names = {}
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= player then
+			table.insert(names, plr.Name)
+		end
+	end
+	if #names == 0 then
+		names = { "(플레이어 없음)" }
+	end
+	return names
+end
+
+local PlayerDropdown = MapTab:CreateDropdown({
+	Name = "길 안내할 플레이어",
+	Options = getPlayerNames(),
+	CurrentOption = {},
+	MultipleOptions = false,
+	Callback = function(selected)
+		local name = selected
+		if type(selected) == "table" then
+			name = selected[1]
+		end
+		if name and Players:FindFirstChild(name) then
+			GPS.TargetName = name
+		else
+			GPS.TargetName = nil
+		end
+	end,
+})
+
+task.defer(function()
+	pcall(function() PlayerDropdown:Set({}) end)
+	GPS.TargetName = nil
+end)
+
+local function refreshPlayers()
+	pcall(function() PlayerDropdown:Refresh(getPlayerNames()) end)
+end
+
+Players.PlayerAdded:Connect(function() task.delay(1, refreshPlayers) end)
+Players.PlayerRemoving:Connect(function() task.delay(1, refreshPlayers) end)
+
+MapTab:CreateButton({
+	Name = "플레이어 목록 새로고침",
+	Callback = refreshPlayers,
+})
+
+MapTab:CreateButton({
+	Name = "현상금 1위 폭주족 선택",
+	Callback = function()
+		local best, bestVal = nil, -1
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= player and inTeam(plr, BIKER_KEYS) then
+				local b = getBounty(plr)
+				if type(b) == "number" and b > bestVal then
+					best, bestVal = plr, b
+				end
+			end
+		end
+		if best then
+			GPS.TargetName = best.Name
+			pcall(function() PlayerDropdown:Set({ best.Name }) end)
+			Rayfield:Notify({
+				Title = "GPS",
+				Content = best.DisplayName .. " (현상금 " .. fmtNum(bestVal) .. ")",
+				Duration = 3,
+			})
+		else
+			Rayfield:Notify({
+				Title = "GPS",
+				Content = "현상금이 있는 폭주족이 없음",
+				Duration = 3,
+			})
+		end
+	end,
+})
+
+MapTab:CreateToggle({
+	Name = "GPS 켜기",
+	CurrentValue = false,
+	Callback = function(v)
+		GPS.Enabled = v
+		gpsGui.Enabled = v
+		if not v then
+			GPS.Waypoints = {}
+			clearDots()
+		end
+	end,
+})
+
+MapTab:CreateToggle({
+	Name = "경로 점 표시",
+	CurrentValue = true,
+	Flag = "GPSPath",
+	Callback = function(v)
+		GPS.ShowPath = v
+		if not v then clearDots() end
+	end,
+})
+
+local ProximityPromptService = game:GetService("ProximityPromptService")
+PoliceTab:CreateSection("Instant Cuff")
+
+local Police = {
+	InstantPrompt = false,
+	AllPrompts = false,
+}
+
+local CUFF_KEYS = { "수갑", "handcuff", "cuff", "체포", "arrest" }
+local originalHold = setmetatable({}, { __mode = "k" })
+
+local function isCuffPrompt(prompt)
+	local text = string.lower(
+		tostring(prompt.ActionText) .. " " ..
+		tostring(prompt.ObjectText) .. " " ..
+		prompt.Name
+	)
+	for _, k in ipairs(CUFF_KEYS) do
+		if string.find(text, k, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+ProximityPromptService.PromptShown:Connect(function(prompt)
+	if not Police.InstantPrompt then return end
+	if not (Police.AllPrompts or isCuffPrompt(prompt)) then return end
+
+	if originalHold[prompt] == nil then
+		originalHold[prompt] = prompt.HoldDuration
+	end
+	prompt.HoldDuration = 0
+end)
+
+local function restorePrompts()
+	for prompt, hold in pairs(originalHold) do
+		pcall(function() prompt.HoldDuration = hold end)
+		originalHold[prompt] = nil
+	end
+end
+
+PoliceTab:CreateParagraph({
+	Title = "안내",
+	Content = "ProximityPrompt의 꾹 누르는 시간을 0으로 강제 변경\n한 번 누르면 바로 실행",
+})
+
+PoliceTab:CreateToggle({
+	Name = "수갑 즉시 실행 (단클릭)",
+	CurrentValue = false,
+	Flag = "InstantPrompt",
+	Callback = function(v)
+		Police.InstantPrompt = v
+		if not v then
+			restorePrompts()
+		end
+	end,
+})
+
+PoliceTab:CreateToggle({
+	Name = "모든 프롬프트에 적용",
+	CurrentValue = false,
+	Flag = "InstantAllPrompts",
+	Callback = function(v) Police.AllPrompts = v end,
+})
+
+PoliceTab:CreateSection("Auto Arrest")
+
+local AutoArrest = {
+	Active = false,
+	Running = false,
+	Timeout = 6,
+	Offset = 3,
+}
+
+local skipped = {}
+local HANDCUFF_KEYS = { "handcuff", "cuff", "수갑" }
+local ArrestToggle
+
+local function findHandcuffs()
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	for _, container in ipairs({ player.Character, backpack }) do
+		if container then
+			for _, item in ipairs(container:GetChildren()) do
+				if item:IsA("Tool") then
+					local n = string.lower(item.Name)
+					for _, k in ipairs(HANDCUFF_KEYS) do
+						if string.find(n, k, 1, true) then
+							return item
+						end
+					end
+				end
+			end
+		end
+	end
+	return nil
+end
+
+local function equipHandcuffs()
+	local tool = findHandcuffs()
+	if not tool then return nil end
+	local char = player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if hum and tool.Parent ~= char then
+		pcall(function() hum:EquipTool(tool) end)
+	end
+	return tool
+end
+
+local VIM
+pcall(function() VIM = game:GetService("VirtualInputManager") end)
+
+local shownPrompts = {}
+ProximityPromptService.PromptShown:Connect(function(prompt)
+	shownPrompts[prompt] = true
+end)
+ProximityPromptService.PromptHidden:Connect(function(prompt)
+	shownPrompts[prompt] = nil
+end)
+
+local function findPrompt(targetChar)
+	for prompt in pairs(shownPrompts) do
+		if prompt.Parent and (prompt:IsDescendantOf(targetChar) or isCuffPrompt(prompt)) then
+			return prompt
+		end
+	end
+	for _, d in ipairs(targetChar:GetDescendants()) do
+		if d:IsA("ProximityPrompt") and d.Enabled then
+			return d
+		end
+	end
+	return nil
+end
+
+local function triggerPrompt(prompt)
+	pcall(function() prompt.HoldDuration = 0 end)
+
+	if fireproximityprompt then
+		pcall(fireproximityprompt, prompt)
+	end
+
+	if VIM then
+		local key = prompt.KeyboardKeyCode
+		if key == Enum.KeyCode.Unknown then
+			key = Enum.KeyCode.E
+		end
+		pcall(function()
+			VIM:SendKeyEvent(true, key, false, game)
+			task.wait(0.15)
+			VIM:SendKeyEvent(false, key, false, game)
+		end)
+	end
+end
+
+local function isArrested(plr, char0)
+	if not plr.Parent then return true end
+	if plr.Character ~= char0 then return true end
+	if not inTeam(plr, BIKER_KEYS) then return true end
+	for name, val in pairs(char0:GetAttributes()) do
+		local n = string.lower(name)
+		if val == true and (string.find(n, "cuff", 1, true) or string.find(n, "arrest", 1, true)) then
+			return true
+		end
+	end
+	return false
+end
+
+local function teleportBehind(mRoot, tRoot)
+	local behind = (tRoot.CFrame * CFrame.new(0, 0, AutoArrest.Offset)).Position
+	pcall(function()
+		mRoot.CFrame = CFrame.lookAt(behind, tRoot.Position)
+		mRoot.AssemblyLinearVelocity = Vector3.zero
+	end)
+end
+
+local function tryEquip()
+	for _ = 1, 8 do
+		local tool = equipHandcuffs()
+		if not tool then return nil end
+		task.wait(0.2)
+		if tool.Parent == player.Character then
+			return tool
+		end
+	end
+	return nil
+end
+
+local function arrestLoop()
+	AutoArrest.Running = true
+	local done, failed = 0, 0
+	local tried = {}
+
+	while AutoArrest.Active do
+		if not inTeam(player, POLICE_KEYS) then
+			Rayfield:Notify({ Title = "Auto Arrest", Content = "경찰팀이 아님", Duration = 3 })
+			break
+		end
+		if not findHandcuffs() then
+			Rayfield:Notify({ Title = "Auto Arrest", Content = "수갑을 찾을 수 없음", Duration = 3 })
+			break
+		end
+
+		local myRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+		if not myRoot then
+			task.wait(0.5)
+			continue
+		end
+
+		local list = {}
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= player and not tried[plr] and inTeam(plr, BIKER_KEYS) then
+				local root = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+				if root then
+					table.insert(list, { plr = plr, dist = (root.Position - myRoot.Position).Magnitude })
+				end
+			end
+		end
+		table.sort(list, function(a, b) return a.dist < b.dist end)
+
+		if #list == 0 then break end
+
+		local target = list[1].plr
+		tried[target] = true
+		local char0 = target.Character
+		local tRoot = char0 and char0:FindFirstChild("HumanoidRootPart")
+		if not tRoot then
+			failed = failed + 1
+			continue
+		end
+
+		teleportBehind(myRoot, tRoot)
+		task.wait(0.3)
+
+		local tool = tryEquip()
+		if not tool then
+			failed = failed + 1
+			Rayfield:Notify({
+				Title = "Auto Arrest",
+				Content = target.DisplayName .. ": 수갑을 들 수 없어 건너뜀",
+				Duration = 3,
+			})
+			continue
+		end
+
+		local t0 = os.clock()
+		local arrested = false
+		while AutoArrest.Active and os.clock() - t0 < AutoArrest.Timeout do
+			if isArrested(target, char0) then
+				arrested = true
+				break
+			end
+
+			tRoot = char0:FindFirstChild("HumanoidRootPart")
+			local mRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+			if not (tRoot and mRoot) then break end
+
+			if (mRoot.Position - tRoot.Position).Magnitude > AutoArrest.Offset + 4 then
+				teleportBehind(mRoot, tRoot)
+			end
+
+			tool = equipHandcuffs() or tool
+			local prompt = findPrompt(char0)
+			if prompt then
+				triggerPrompt(prompt)
+			else
+				pcall(function() tool:Activate() end)
+			end
+			task.wait(0.5)
+		end
+
+		if arrested then
+			done = done + 1
+		else
+			failed = failed + 1
+		end
+		task.wait(0.5)
+	end
+
+	AutoArrest.Running = false
+	AutoArrest.Active = false
+	pcall(function() ArrestToggle:Set(false) end)
+	Rayfield:Notify({
+		Title = "Auto Arrest",
+		Content = string.format("종료 - 성공 %d / 건너뜀·실패 %d", done, failed),
+		Duration = 4,
+	})
+end
+
+PoliceTab:CreateParagraph({
+	Title = "안내",
+	Content = "미완성",
+})
+
+ArrestToggle = PoliceTab:CreateToggle({
+	Name = "Auto Arrest",
+	CurrentValue = false,
+	Callback = function(v)
+		AutoArrest.Active = v
+		if v and not AutoArrest.Running then
+			task.spawn(arrestLoop)
+		end
+	end,
+})
+
+PoliceTab:CreateSlider({
+	Name = "한 명당 최대 시도 시간",
+	Range = {3, 15},
+	Increment = 1,
+	Suffix = "s",
+	CurrentValue = 6,
+	Flag = "ArrestTimeout",
+	Callback = function(v) AutoArrest.Timeout = v end,
+})
+
+PoliceTab:CreateSlider({
+	Name = "대상과의 거리",
+	Range = {1, 6},
+	Increment = 1,
+	Suffix = "studs",
+	CurrentValue = 3,
+	Flag = "ArrestOffset",
+	Callback = function(v) AutoArrest.Offset = v end,
+})
+
+local ViewTab = Window:CreateTab("PLAYER", 4483362458)
+
+local View = {
+	Enabled = false,
+	TargetName = nil,
+}
+
+local function getMyHumanoid()
+	local char = player.Character
+	return char and char:FindFirstChildOfClass("Humanoid")
+end
+
+local function restoreView()
+	local cam = Workspace.CurrentCamera
+	local hum = getMyHumanoid()
+	if cam and hum then
+		cam.CameraSubject = hum
+	end
+end
+
+RunService.RenderStepped:Connect(function()
+	if not View.Enabled then return end
+
+	local cam = Workspace.CurrentCamera
+	local plr = View.TargetName and Players:FindFirstChild(View.TargetName)
+	local char = plr and plr.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+	if cam and hum then
+		if cam.CameraSubject ~= hum then
+			cam.CameraSubject = hum
+		end
+	elseif cam and not plr then
+		View.Enabled = false
+		restoreView()
+		Rayfield:Notify({
+			Title = "View",
+			Content = "대상이 서버를 나감",
+			Duration = 3,
+		})
+	end
+end)
+
+local ViewDropdown = ViewTab:CreateDropdown({
+	Name = "관전할 플레이어",
+	Options = getPlayerNames(),
+	CurrentOption = {},
+	MultipleOptions = false,
+	Callback = function(selected)
+		local name = selected
+		if type(selected) == "table" then
+			name = selected[1]
+		end
+		if name and Players:FindFirstChild(name) then
+			View.TargetName = name
+		else
+			View.TargetName = nil
+		end
+	end,
+})
+
+task.defer(function()
+	pcall(function() ViewDropdown:Set({}) end)
+	View.TargetName = nil
+end)
+
+local function refreshViewPlayers()
+	pcall(function() ViewDropdown:Refresh(getPlayerNames()) end)
+end
+
+Players.PlayerAdded:Connect(function() task.delay(1, refreshViewPlayers) end)
+Players.PlayerRemoving:Connect(function() task.delay(1, refreshViewPlayers) end)
+
+ViewTab:CreateToggle({
+	Name = "관전 켜기",
+	CurrentValue = false,
+	Callback = function(v)
+		View.Enabled = v
+		if v and not View.TargetName then
+			Rayfield:Notify({
+				Title = "View",
+				Content = "관전할 플레이어를 선택하세요",
+				Duration = 3,
+			})
+		end
+		if not v then
+			restoreView()
+		end
+	end,
+})
+
+ViewTab:CreateButton({
+	Name = "다음 플레이어",
+	Callback = function()
+		local names = {}
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= player then
+				table.insert(names, plr.Name)
+			end
+		end
+		if #names == 0 then return end
+
+		local nextIdx = 1
+		for i, n in ipairs(names) do
+			if n == View.TargetName then
+				nextIdx = (i % #names) + 1
+				break
+			end
+		end
+		View.TargetName = names[nextIdx]
+		pcall(function() ViewDropdown:Set({ View.TargetName }) end)
+	end,
+})
+
+ViewTab:CreateButton({
+	Name = "현상금 1위 폭주족 선택",
+	Callback = function()
+		local best, bestVal = nil, -1
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= player and inTeam(plr, BIKER_KEYS) then
+				local b = getBounty(plr)
+				if type(b) == "number" and b > bestVal then
+					best, bestVal = plr, b
+				end
+			end
+		end
+		if best then
+			View.TargetName = best.Name
+			pcall(function() ViewDropdown:Set({ best.Name }) end)
+			Rayfield:Notify({
+				Title = "View",
+				Content = best.DisplayName .. " (현상금 " .. fmtNum(bestVal) .. ")",
+				Duration = 3,
+			})
+		else
+			Rayfield:Notify({
+				Title = "View",
+				Content = "현상금이 있는 폭주족이 없음",
+				Duration = 3,
+			})
+		end
+	end,
+})
+
+ViewTab:CreateButton({
+	Name = "플레이어 목록 새로고침",
+	Callback = refreshViewPlayers,
+})
+
+local TP = { Offset = 4 }
+
+local function teleportTo(plr)
+	local myChar = player.Character
+	local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+	local char = plr and plr.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+
+	if not (myRoot and root) then
+		Rayfield:Notify({
+			Title = "텔레포트",
+			Content = "대상을 찾을 수 없음",
+			Duration = 3,
+		})
+		return
+	end
+
+	pcall(function()
+		myRoot.CFrame = root.CFrame * CFrame.new(0, 0, TP.Offset)
+		myRoot.AssemblyLinearVelocity = Vector3.zero
+	end)
+
+	if View.Enabled then
+		View.Enabled = false
+		restoreView()
+	end
+end
+
+ViewTab:CreateSection("텔레포트")
+
+ViewTab:CreateButton({
+	Name = "선택한 플레이어에게 텔레포트",
+	Callback = function()
+		local plr = View.TargetName and Players:FindFirstChild(View.TargetName)
+		if plr then
+			teleportTo(plr)
+		else
+			Rayfield:Notify({
+				Title = "텔레포트",
+				Content = "먼저 플레이어를 선택하세요",
+				Duration = 3,
+			})
+		end
+	end,
+})
+
+ViewTab:CreateSlider({
+	Name = "대상과의 거리",
+	Range = {0, 20},
+	Increment = 1,
+	Suffix = "studs",
+	CurrentValue = 4,
+	Flag = "TPOffset",
+	Callback = function(v) TP.Offset = v end,
+})
+
+local COORD_TARGET = Vector3.new(89, 1149, 24)
+
+ViewTab:CreateButton({
+	Name = "좌표 이동 (89, 1149, 24)",
+	Callback = function()
+		local myChar = player.Character
+		local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+
+		if not myRoot then
+			Rayfield:Notify({
+				Title = "좌표 이동",
+				Content = "내 캐릭터를 찾을 수 없음",
+				Duration = 3,
+			})
+			return
+		end
+
+		pcall(function()
+			myRoot.CFrame = CFrame.new(COORD_TARGET)
+			myRoot.AssemblyLinearVelocity = Vector3.zero
+		end)
+
+		if View.Enabled then
+			View.Enabled = false
+			restoreView()
+		end
+	end,
+})
+
+local CreditsTab = Window:CreateTab("Credits", 4483362458)
+
+CreditsTab:CreateParagraph({
+	Title = "제작:서쫀쿠",
+	Content = "제작:서쫀쿠",
+})
+
+CreditsTab:CreateParagraph({
+	Title = "UI 라이브러리",
+	Content = "Rayfield by Sirius\nhttps://sirius.menu/rayfield",
+})
+
+CreditsTab:CreateParagraph({
+	Title = "문의",
+	Content = "Discord: gyeongjuping",
+})
+
+Rayfield:LoadConfiguration()
