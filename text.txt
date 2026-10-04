@@ -841,7 +841,9 @@ local AutoArrest = {
 	Active = false,
 	Running = false,
 	Timeout = 6,
-	Offset = 3,
+	Offset = 0,
+	ExtendPrompt = true,
+	PromptDistance = 30,
 }
 
 local skipped = {}
@@ -936,6 +938,33 @@ local function isArrested(plr, char0)
 	return false
 end
 
+local originalDist = setmetatable({}, { __mode = "k" })
+
+local function extendPrompts(targetChar)
+	if not AutoArrest.ExtendPrompt then return end
+	for _, d in ipairs(targetChar:GetDescendants()) do
+		if d:IsA("ProximityPrompt") then
+			if originalDist[d] == nil then
+				originalDist[d] = { d.MaxActivationDistance, d.RequiresLineOfSight }
+			end
+			pcall(function()
+				d.MaxActivationDistance = AutoArrest.PromptDistance
+				d.RequiresLineOfSight = false
+			end)
+		end
+	end
+end
+
+local function restorePromptDistance()
+	for d, v in pairs(originalDist) do
+		pcall(function()
+			d.MaxActivationDistance = v[1]
+			d.RequiresLineOfSight = v[2]
+		end)
+		originalDist[d] = nil
+	end
+end
+
 local failedZones = {}
 local ZONE_RADIUS = 70
 
@@ -965,11 +994,25 @@ end
 local function teleportBehind(mRoot, tRoot)
 	local vel = tRoot.AssemblyLinearVelocity
 	local flat = Vector3.new(vel.X, 0, vel.Z)
+	local offset = AutoArrest.Offset
+
+	if offset <= 0 then
+		local p = tRoot.Position
+		if flat.Magnitude > 4 then
+			p = p + vel * 0.12
+		end
+		pcall(function()
+			mRoot.CFrame = CFrame.new(p) * (tRoot.CFrame - tRoot.CFrame.Position)
+			mRoot.AssemblyLinearVelocity = vel
+		end)
+		return
+	end
+
 	local pos
 	if flat.Magnitude > 4 then
-		pos = tRoot.Position + vel * 0.12 - flat.Unit * AutoArrest.Offset
+		pos = tRoot.Position + vel * 0.12 - flat.Unit * offset
 	else
-		pos = (tRoot.CFrame * CFrame.new(0, 0, AutoArrest.Offset)).Position
+		pos = (tRoot.CFrame * CFrame.new(0, 0, offset)).Position
 	end
 	pcall(function()
 		mRoot.CFrame = CFrame.lookAt(pos, tRoot.Position)
@@ -1034,6 +1077,7 @@ local function arrestLoop()
 		end
 
 		teleportBehind(myRoot, tRoot)
+		extendPrompts(char0)
 		task.wait(0.2)
 
 		local tool = tryEquip()
@@ -1083,6 +1127,7 @@ local function arrestLoop()
 				equipTries = 0
 				if now - lastTrigger > 0.4 then
 					lastTrigger = now
+					extendPrompts(char0)
 					local prompt = findPrompt(char0)
 					if prompt then
 						task.spawn(triggerPrompt, prompt)
@@ -1150,13 +1195,35 @@ PoliceTab:CreateSlider({
 })
 
 PoliceTab:CreateSlider({
-	Name = "대상과의 거리",
-	Range = {1, 6},
+	Name = "대상과의 거리 (0 = 겹쳐서 고정)",
+	Range = {0, 6},
 	Increment = 1,
 	Suffix = "studs",
-	CurrentValue = 3,
+	CurrentValue = 0,
 	Flag = "ArrestOffset",
 	Callback = function(v) AutoArrest.Offset = v end,
+})
+
+PoliceTab:CreateToggle({
+	Name = "프롬프트 인식 거리 늘리기",
+	CurrentValue = true,
+	Flag = "ArrestExtendPrompt",
+	Callback = function(v)
+		AutoArrest.ExtendPrompt = v
+		if not v then
+			restorePromptDistance()
+		end
+	end,
+})
+
+PoliceTab:CreateSlider({
+	Name = "프롬프트 인식 거리",
+	Range = {10, 60},
+	Increment = 5,
+	Suffix = "studs",
+	CurrentValue = 30,
+	Flag = "ArrestPromptDistance",
+	Callback = function(v) AutoArrest.PromptDistance = v end,
 })
 
 local ViewTab = Window:CreateTab("PLAYER", 4483362458)
