@@ -936,11 +936,44 @@ local function isArrested(plr, char0)
 	return false
 end
 
+local failedZones = {}
+local ZONE_RADIUS = 70
+
+local function inFailedZone(pos)
+	for _, z in ipairs(failedZones) do
+		if (pos - z).Magnitude <= ZONE_RADIUS then
+			return true
+		end
+	end
+	return false
+end
+
+local function looksSafe(plr)
+	local char = plr.Character
+	if not char then return true end
+	if char:FindFirstChildOfClass("ForceField") then return true end
+	for _, obj in ipairs({ char, plr }) do
+		for name, val in pairs(obj:GetAttributes()) do
+			if val == true and string.find(string.lower(name), "safe", 1, true) then
+				return true
+			end
+		end
+	end
+	return false
+end
+
 local function teleportBehind(mRoot, tRoot)
-	local behind = (tRoot.CFrame * CFrame.new(0, 0, AutoArrest.Offset)).Position
+	local vel = tRoot.AssemblyLinearVelocity
+	local flat = Vector3.new(vel.X, 0, vel.Z)
+	local pos
+	if flat.Magnitude > 4 then
+		pos = tRoot.Position + vel * 0.12 - flat.Unit * AutoArrest.Offset
+	else
+		pos = (tRoot.CFrame * CFrame.new(0, 0, AutoArrest.Offset)).Position
+	end
 	pcall(function()
-		mRoot.CFrame = CFrame.lookAt(behind, tRoot.Position)
-		mRoot.AssemblyLinearVelocity = Vector3.zero
+		mRoot.CFrame = CFrame.lookAt(pos, tRoot.Position)
+		mRoot.AssemblyLinearVelocity = vel
 	end)
 end
 
@@ -948,7 +981,7 @@ local function tryEquip()
 	for _ = 1, 8 do
 		local tool = equipHandcuffs()
 		if not tool then return nil end
-		task.wait(0.2)
+		task.wait(0.15)
 		if tool.Parent == player.Character then
 			return tool
 		end
@@ -958,6 +991,7 @@ end
 
 local function arrestLoop()
 	AutoArrest.Running = true
+	failedZones = {}
 	local done, failed = 0, 0
 	local tried = {}
 
@@ -981,7 +1015,7 @@ local function arrestLoop()
 		for _, plr in ipairs(Players:GetPlayers()) do
 			if plr ~= player and not tried[plr] and inTeam(plr, BIKER_KEYS) then
 				local root = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
-				if root then
+				if root and not inFailedZone(root.Position) and not looksSafe(plr) then
 					table.insert(list, { plr = plr, dist = (root.Position - myRoot.Position).Magnitude })
 				end
 			end
@@ -1000,21 +1034,25 @@ local function arrestLoop()
 		end
 
 		teleportBehind(myRoot, tRoot)
-		task.wait(0.3)
+		task.wait(0.2)
 
 		local tool = tryEquip()
 		if not tool then
+			table.insert(failedZones, tRoot.Position)
 			failed = failed + 1
 			Rayfield:Notify({
 				Title = "Auto Arrest",
-				Content = target.DisplayName .. ": 수갑을 들 수 없어 건너뜀",
+				Content = target.DisplayName .. ": 수갑을 들 수 없어 이 구역 건너뜀",
 				Duration = 3,
 			})
 			continue
 		end
 
 		local t0 = os.clock()
-		local arrested = false
+		local lastEquip, lastTrigger = 0, 0
+		local equipTries = 0
+		local arrested, gaveUp = false, false
+
 		while AutoArrest.Active and os.clock() - t0 < AutoArrest.Timeout do
 			if isArrested(target, char0) then
 				arrested = true
@@ -1022,29 +1060,57 @@ local function arrestLoop()
 			end
 
 			tRoot = char0:FindFirstChild("HumanoidRootPart")
-			local mRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+			local mChar = player.Character
+			local mRoot = mChar and mChar:FindFirstChild("HumanoidRootPart")
 			if not (tRoot and mRoot) then break end
 
-			if (mRoot.Position - tRoot.Position).Magnitude > AutoArrest.Offset + 4 then
+			if (mRoot.Position - tRoot.Position).Magnitude > AutoArrest.Offset + 1.5 then
 				teleportBehind(mRoot, tRoot)
 			end
 
-			tool = equipHandcuffs() or tool
-			local prompt = findPrompt(char0)
-			if prompt then
-				triggerPrompt(prompt)
+			local now = os.clock()
+			if tool.Parent ~= mChar then
+				if now - lastEquip > 0.12 then
+					lastEquip = now
+					equipTries = equipTries + 1
+					if equipTries > 8 then
+						gaveUp = true
+						break
+					end
+					tool = equipHandcuffs() or tool
+				end
 			else
-				pcall(function() tool:Activate() end)
+				equipTries = 0
+				if now - lastTrigger > 0.4 then
+					lastTrigger = now
+					local prompt = findPrompt(char0)
+					if prompt then
+						task.spawn(triggerPrompt, prompt)
+					else
+						pcall(function() tool:Activate() end)
+					end
+				end
 			end
-			task.wait(0.5)
+
+			task.wait()
 		end
 
 		if arrested then
 			done = done + 1
+		elseif gaveUp then
+			if tRoot then
+				table.insert(failedZones, tRoot.Position)
+			end
+			failed = failed + 1
+			Rayfield:Notify({
+				Title = "Auto Arrest",
+				Content = target.DisplayName .. ": 수갑이 계속 내려가 건너뜀",
+				Duration = 3,
+			})
 		else
 			failed = failed + 1
 		end
-		task.wait(0.5)
+		task.wait(0.3)
 	end
 
 	AutoArrest.Running = false
@@ -1547,21 +1613,6 @@ ServerTab:CreateToggle({
 	CurrentValue = true,
 	Flag = "HopAutoReload",
 	Callback = function(v) ServerHop.AutoReload = v end,
-})
-
-ServerTab:CreateInput({
-	Name = "스크립트 URL (raw 링크)",
-	PlaceholderText = DEFAULT_SCRIPT_URL,
-	RemoveTextAfterFocusLost = false,
-	Flag = "HopScriptURL",
-	Callback = function(text)
-		text = tostring(text or "")
-		if text == "" then
-			ServerHop.ScriptURL = DEFAULT_SCRIPT_URL
-		else
-			ServerHop.ScriptURL = text
-		end
-	end,
 })
 
 ServerTab:CreateSection("이동")
