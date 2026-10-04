@@ -1330,8 +1330,8 @@ ViewTab:CreateButton({
 local CreditsTab = Window:CreateTab("Credits", 4483362458)
 
 CreditsTab:CreateParagraph({
-	Title = "제작:서쫀쿠",
-	Content = "제작:서쫀쿠",
+	Title = "제작",
+	Content = "서쫀쿠",
 })
 
 CreditsTab:CreateParagraph({
