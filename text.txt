@@ -940,20 +940,42 @@ end
 
 local originalDist = setmetatable({}, { __mode = "k" })
 
+local function applyExtend(d)
+	if originalDist[d] == nil then
+		originalDist[d] = { d.MaxActivationDistance, d.RequiresLineOfSight }
+	end
+	pcall(function()
+		d.MaxActivationDistance = AutoArrest.PromptDistance
+		d.RequiresLineOfSight = false
+	end)
+end
+
 local function extendPrompts(targetChar)
 	if not AutoArrest.ExtendPrompt then return end
 	for _, d in ipairs(targetChar:GetDescendants()) do
 		if d:IsA("ProximityPrompt") then
-			if originalDist[d] == nil then
-				originalDist[d] = { d.MaxActivationDistance, d.RequiresLineOfSight }
-			end
-			pcall(function()
-				d.MaxActivationDistance = AutoArrest.PromptDistance
-				d.RequiresLineOfSight = false
-			end)
+			applyExtend(d)
 		end
 	end
 end
+
+task.spawn(function()
+	while true do
+		task.wait(1)
+		if AutoArrest.ExtendPrompt and AutoArrest.Active then
+			for _, plr in ipairs(Players:GetPlayers()) do
+				if plr ~= player and plr.Character and inTeam(plr, BIKER_KEYS) then
+					extendPrompts(plr.Character)
+				end
+			end
+			for _, d in ipairs(Workspace:GetDescendants()) do
+				if d:IsA("ProximityPrompt") and isCuffPrompt(d) then
+					applyExtend(d)
+				end
+			end
+		end
+	end
+end)
 
 local function restorePromptDistance()
 	for d, v in pairs(originalDist) do
@@ -1213,6 +1235,57 @@ PoliceTab:CreateToggle({
 		if not v then
 			restorePromptDistance()
 		end
+	end,
+})
+
+PoliceTab:CreateButton({
+	Name = "주변 프롬프트 확인 (40 studs)",
+	Callback = function()
+		local myRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+		if not myRoot then return end
+
+		local lines = {}
+		for _, d in ipairs(Workspace:GetDescendants()) do
+			if d:IsA("ProximityPrompt") then
+				local par = d.Parent
+				local pos
+				if par and par:IsA("BasePart") then
+					pos = par.Position
+				elseif par and par:IsA("Attachment") then
+					pos = par.WorldPosition
+				end
+				if pos then
+					local dist = (pos - myRoot.Position).Magnitude
+					if dist <= 40 then
+						table.insert(lines, string.format(
+							"[%s] %s | 위치: %s | 거리 %.0f | 최대 %s | 홀드 %s",
+							d.ActionText ~= "" and d.ActionText or "(문구없음)",
+							d.Name,
+							d:GetFullName(),
+							dist,
+							tostring(d.MaxActivationDistance),
+							tostring(d.HoldDuration)
+						))
+					end
+				end
+			end
+		end
+
+		if #lines == 0 then
+			Rayfield:Notify({ Title = "프롬프트", Content = "주변 40 studs에 프롬프트 없음", Duration = 4 })
+			return
+		end
+
+		local text = table.concat(lines, "\n")
+		print(text)
+		if setclipboard then
+			pcall(setclipboard, text)
+		end
+		Rayfield:Notify({
+			Title = "프롬프트",
+			Content = #lines .. "개 발견 (F9 콘솔 출력" .. (setclipboard and ", 클립보드 복사됨)" or ")"),
+			Duration = 5,
+		})
 	end,
 })
 
