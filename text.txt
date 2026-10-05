@@ -23,7 +23,7 @@ local totalEarned = 0
 local lastMoney = 0
 local scriptStartTime = os.time()
 local logs = {}
-local MAX_LOGS = 20
+local MAX_LOGS = 10
 
 if player:FindFirstChild("leaderstats") and player.leaderstats:FindFirstChild("Money") then
 	lastMoney = player.leaderstats.Money.Value
@@ -45,7 +45,7 @@ local MainTab = Window:CreateTab("Main", 4483362458)
 
 local MoneyLabel   = MainTab:CreateLabel("돈: 로딩중...")
 local JobLabel     = MainTab:CreateLabel("직업: 로딩중...")
-local TimeLabel    = MainTab:CreateLabel("적용 시간: 0분 0초")
+local TimeLabel    = MainTab:CreateLabel("적용 시간: 0시간 0분")
 local EarnedLabel  = MainTab:CreateLabel("총 수익: 0")
 
 local LogParagraph
@@ -53,11 +53,12 @@ local LogParagraph
 local function addLog(amount)
 	if not LogParagraph then return end
 	local timeStr = os.date("%H:%M:%S")
-	table.insert(logs, 1, string.format("[%s] +%s원", timeStr, tostring(amount)))
 
-	if #logs > MAX_LOGS then
-		table.remove(logs)
+	if #logs >= MAX_LOGS then
+		logs = {}
 	end
+
+	table.insert(logs, 1, string.format("[%s] +%s원", timeStr, tostring(amount)))
 
 	LogParagraph:Set({
 		Title = "잔액 변동 기록",
@@ -67,9 +68,9 @@ end
 
 local function updateTimeLabel()
 	local elapsed = os.time() - scriptStartTime
-	local minutes = math.floor(elapsed / 60)
-	local seconds = elapsed % 60
-	TimeLabel:Set(string.format("적용 시간: %d분 %d초", minutes, seconds))
+	local hours = math.floor(elapsed / 3600)
+	local minutes = math.floor((elapsed % 3600) / 60)
+	TimeLabel:Set(string.format("적용 시간: %d시간 %d분", hours, minutes))
 end
 
 task.spawn(function()
@@ -213,10 +214,6 @@ ESPTab:CreateSection("ESP")
 
 local ESP = {
 	Enabled = false,
-	Highlight = true,
-	Names = true,
-	Distance = true,
-	Bounty = true,
 	MaxDistance = 3000,
 }
 
@@ -225,23 +222,13 @@ local espObjects = {}
 local function removeESP(plr)
 	local obj = espObjects[plr]
 	if obj then
-		if obj.Highlight then obj.Highlight:Destroy() end
 		if obj.Billboard then obj.Billboard:Destroy() end
 		espObjects[plr] = nil
 	end
 end
 
-local function createESP(plr, char, root)
+local function createESP(plr, root)
 	removeESP(plr)
-
-	local hl = Instance.new("Highlight")
-	hl.Name = "ESP_HL_" .. plr.Name
-	hl.Adornee = char
-	hl.FillTransparency = 0.5
-	hl.OutlineTransparency = 0
-	hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-	hl.Enabled = false
-	hl.Parent = espFolder
 
 	local bb = Instance.new("BillboardGui")
 	bb.Name = "ESP_BB_" .. plr.Name
@@ -261,7 +248,7 @@ local function createESP(plr, char, root)
 	label.Text = ""
 	label.Parent = bb
 
-	espObjects[plr] = { Highlight = hl, Billboard = bb, Label = label }
+	espObjects[plr] = { Billboard = bb, Label = label }
 	return espObjects[plr]
 end
 
@@ -278,32 +265,25 @@ RunService.RenderStepped:Connect(function()
 
 			if root and inTeam(plr, BIKER_KEYS) then
 				local obj = espObjects[plr]
-				if not obj or obj.Highlight.Adornee ~= char or obj.Billboard.Adornee ~= root then
-					obj = createESP(plr, char, root)
+				if not obj or obj.Billboard.Adornee ~= root then
+					obj = createESP(plr, root)
 				end
 
 				local dist = myRoot and (myRoot.Position - root.Position).Magnitude or 0
-				local visible = dist <= ESP.MaxDistance
-				local col = teamColor(plr)
+				obj.Billboard.Enabled = dist <= ESP.MaxDistance
+				obj.Label.TextColor3 = teamColor(plr)
 
-				obj.Highlight.FillColor = col
-				obj.Highlight.OutlineColor = col
-				obj.Highlight.Enabled = visible and ESP.Highlight
-				obj.Label.TextColor3 = col
-
-				local lines = {}
-				if ESP.Names then
-					table.insert(lines, plr.DisplayName)
-				end
-				if ESP.Bounty then
+				local now = os.clock()
+				if now - (obj.lastUpdate or 0) >= 1 then
+					obj.lastUpdate = now
 					local b = getBounty(plr)
-					table.insert(lines, "현상금: " .. (b and fmtNum(b) or "?"))
+					obj.Label.Text = string.format(
+						"%s\n현상금: %s\n[%d m]",
+						plr.DisplayName,
+						b and fmtNum(b) or "?",
+						dist
+					)
 				end
-				if ESP.Distance then
-					table.insert(lines, string.format("[%d m]", dist))
-				end
-				obj.Label.Text = table.concat(lines, "\n")
-				obj.Billboard.Enabled = visible and #lines > 0
 			else
 				removeESP(plr)
 			end
@@ -315,7 +295,7 @@ Players.PlayerRemoving:Connect(removeESP)
 
 ESPTab:CreateParagraph({
 	Title = "안내",
-	Content = "폭주족 팀만 표시됨\n이름/외곽선 색은 팀 색으로 자동 적용",
+	Content = "폭주족 팀만 표시됨\n이름 / 현상금 / 거리 (팀 색 적용)",
 })
 
 ESPTab:CreateToggle({
@@ -330,44 +310,6 @@ ESPTab:CreateToggle({
 			end
 		end
 	end,
-})
-
-ESPTab:CreateToggle({
-	Name = "하이라이트(외곽선)",
-	CurrentValue = true,
-	Flag = "ESPHighlight",
-	Callback = function(v) ESP.Highlight = v end,
-})
-
-ESPTab:CreateToggle({
-	Name = "이름 표시",
-	CurrentValue = true,
-	Flag = "ESPNames",
-	Callback = function(v) ESP.Names = v end,
-})
-
-ESPTab:CreateToggle({
-	Name = "현상금 표시",
-	CurrentValue = true,
-	Flag = "ESPBounty",
-	Callback = function(v) ESP.Bounty = v end,
-})
-
-ESPTab:CreateToggle({
-	Name = "거리 표시",
-	CurrentValue = true,
-	Flag = "ESPDistance",
-	Callback = function(v) ESP.Distance = v end,
-})
-
-ESPTab:CreateSlider({
-	Name = "최대 거리",
-	Range = {100, 5000},
-	Increment = 50,
-	Suffix = "m",
-	CurrentValue = 3000,
-	Flag = "ESPMaxDist",
-	Callback = function(v) ESP.MaxDistance = v end,
 })
 
 HitTab:CreateSection("Hitbox")
@@ -463,7 +405,7 @@ HitTab:CreateParagraph({
 	Content = "내가 경찰팀일 때만 작동\n대상은 폭주족팀 (테이저용)",
 })
 
-HitTab:CreateToggle({
+local HitboxToggle = HitTab:CreateToggle({
 	Name = "히트박스 확장",
 	CurrentValue = false,
 	Flag = "HitboxEnabled",
@@ -518,6 +460,20 @@ HitTab:CreateColorPicker({
 	Callback = function(v) Hitbox.Color = v end,
 })
 
+local function getPlayerNames()
+	local names = {}
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= player then
+			table.insert(names, plr.Name)
+		end
+	end
+	if #names == 0 then
+		names = { "(플레이어 없음)" }
+	end
+	return names
+end
+
+--[==[
 local MapTab = Window:CreateTab("GPS", 4483362458)
 
 local GPS = {
@@ -668,18 +624,6 @@ RunService.RenderStepped:Connect(function()
 	infoLabel.Text = string.format("%s  [%d m]", plr.DisplayName, total)
 end)
 
-local function getPlayerNames()
-	local names = {}
-	for _, plr in ipairs(Players:GetPlayers()) do
-		if plr ~= player then
-			table.insert(names, plr.Name)
-		end
-	end
-	if #names == 0 then
-		names = { "(플레이어 없음)" }
-	end
-	return names
-end
 
 local PlayerDropdown = MapTab:CreateDropdown({
 	Name = "길 안내할 플레이어",
@@ -768,16 +712,16 @@ MapTab:CreateToggle({
 		if not v then clearDots() end
 	end,
 })
+]==]
 
 local ProximityPromptService = game:GetService("ProximityPromptService")
 PoliceTab:CreateSection("Instant Cuff")
 
 local Police = {
 	InstantPrompt = false,
-	AllPrompts = false,
 }
 
-local CUFF_KEYS = { "수갑", "handcuff", "cuff", "체포", "arrest" }
+local CUFF_KEYS = { "수갑", "handcuff", "체포", "arrest" }
 local originalHold = setmetatable({}, { __mode = "k" })
 
 local function isCuffPrompt(prompt)
@@ -794,9 +738,20 @@ local function isCuffPrompt(prompt)
 	return false
 end
 
+local function onPlayerCharacter(prompt)
+	local inst = prompt.Parent
+	while inst and inst ~= Workspace do
+		if inst:IsA("Model") and Players:GetPlayerFromCharacter(inst) then
+			return true
+		end
+		inst = inst.Parent
+	end
+	return false
+end
+
 ProximityPromptService.PromptShown:Connect(function(prompt)
 	if not Police.InstantPrompt then return end
-	if not (Police.AllPrompts or isCuffPrompt(prompt)) then return end
+	if not (isCuffPrompt(prompt) or onPlayerCharacter(prompt)) then return end
 
 	if originalHold[prompt] == nil then
 		originalHold[prompt] = prompt.HoldDuration
@@ -828,13 +783,6 @@ PoliceTab:CreateToggle({
 	end,
 })
 
-PoliceTab:CreateToggle({
-	Name = "모든 프롬프트에 적용",
-	CurrentValue = false,
-	Flag = "InstantAllPrompts",
-	Callback = function(v) Police.AllPrompts = v end,
-})
-
 PoliceTab:CreateSection("Auto Arrest")
 
 local AutoArrest = {
@@ -842,27 +790,16 @@ local AutoArrest = {
 	Running = false,
 	Timeout = 6,
 	Offset = 0,
-	ExtendPrompt = true,
-	PromptDistance = 30,
+	LockOn = true,
 }
-
-local skipped = {}
-local HANDCUFF_KEYS = { "handcuff", "cuff", "수갑" }
-local ArrestToggle
 
 local function findHandcuffs()
 	local backpack = player:FindFirstChildOfClass("Backpack")
 	for _, container in ipairs({ player.Character, backpack }) do
 		if container then
-			for _, item in ipairs(container:GetChildren()) do
-				if item:IsA("Tool") then
-					local n = string.lower(item.Name)
-					for _, k in ipairs(HANDCUFF_KEYS) do
-						if string.find(n, k, 1, true) then
-							return item
-						end
-					end
-				end
+			local tool = container:FindFirstChild("Handcuffs")
+			if tool and tool:IsA("Tool") then
+				return tool
 			end
 		end
 	end
@@ -938,53 +875,48 @@ local function isArrested(plr, char0)
 	return false
 end
 
-local originalDist = setmetatable({}, { __mode = "k" })
+local ZONE_NAME = "RestrictedZone"
+local zoneParts = {}
+local lastZoneScan = 0
 
-local function applyExtend(d)
-	if originalDist[d] == nil then
-		originalDist[d] = { d.MaxActivationDistance, d.RequiresLineOfSight }
-	end
-	pcall(function()
-		d.MaxActivationDistance = AutoArrest.PromptDistance
-		d.RequiresLineOfSight = false
-	end)
-end
-
-local function extendPrompts(targetChar)
-	if not AutoArrest.ExtendPrompt then return end
-	for _, d in ipairs(targetChar:GetDescendants()) do
-		if d:IsA("ProximityPrompt") then
-			applyExtend(d)
+local function refreshZones(force)
+	if not force and os.clock() - lastZoneScan < 60 then return end
+	lastZoneScan = os.clock()
+	local parts = {}
+	local count = 0
+	for _, d in ipairs(Workspace:GetDescendants()) do
+		count = count + 1
+		if count % 3000 == 0 then
+			task.wait()
 		end
-	end
-end
-
-task.spawn(function()
-	while true do
-		task.wait(1)
-		if AutoArrest.ExtendPrompt and AutoArrest.Active then
-			for _, plr in ipairs(Players:GetPlayers()) do
-				if plr ~= player and plr.Character and inTeam(plr, BIKER_KEYS) then
-					extendPrompts(plr.Character)
-				end
-			end
-			for _, d in ipairs(Workspace:GetDescendants()) do
-				if d:IsA("ProximityPrompt") and isCuffPrompt(d) then
-					applyExtend(d)
+		if d.Name == ZONE_NAME then
+			if d:IsA("BasePart") then
+				table.insert(parts, d)
+			else
+				for _, c in ipairs(d:GetDescendants()) do
+					if c:IsA("BasePart") then
+						table.insert(parts, c)
+					end
 				end
 			end
 		end
 	end
-end)
+	zoneParts = parts
+end
 
-local function restorePromptDistance()
-	for d, v in pairs(originalDist) do
-		pcall(function()
-			d.MaxActivationDistance = v[1]
-			d.RequiresLineOfSight = v[2]
-		end)
-		originalDist[d] = nil
+local function inRestrictedZone(pos)
+	for _, part in ipairs(zoneParts) do
+		if part.Parent then
+			local rel = part.CFrame:PointToObjectSpace(pos)
+			local half = part.Size / 2
+			if math.abs(rel.X) <= half.X + 2
+				and math.abs(rel.Y) <= half.Y + 8
+				and math.abs(rel.Z) <= half.Z + 2 then
+				return true
+			end
+		end
 	end
+	return false
 end
 
 local failedZones = {}
@@ -1015,29 +947,12 @@ end
 
 local function teleportBehind(mRoot, tRoot)
 	local vel = tRoot.AssemblyLinearVelocity
-	local flat = Vector3.new(vel.X, 0, vel.Z)
-	local offset = AutoArrest.Offset
-
-	if offset <= 0 then
-		local p = tRoot.Position
-		if flat.Magnitude > 4 then
-			p = p + vel * 0.12
-		end
-		pcall(function()
-			mRoot.CFrame = CFrame.new(p) * (tRoot.CFrame - tRoot.CFrame.Position)
-			mRoot.AssemblyLinearVelocity = vel
-		end)
-		return
-	end
-
-	local pos
-	if flat.Magnitude > 4 then
-		pos = tRoot.Position + vel * 0.12 - flat.Unit * offset
-	else
-		pos = (tRoot.CFrame * CFrame.new(0, 0, offset)).Position
+	local back = AutoArrest.Offset
+	if vel.Magnitude > 20 then
+		back = math.max(back, 2)
 	end
 	pcall(function()
-		mRoot.CFrame = CFrame.lookAt(pos, tRoot.Position)
+		mRoot.CFrame = tRoot.CFrame * CFrame.new(0, 0, back)
 		mRoot.AssemblyLinearVelocity = vel
 	end)
 end
@@ -1057,8 +972,10 @@ end
 local function arrestLoop()
 	AutoArrest.Running = true
 	failedZones = {}
+	refreshZones(true)
 	local done, failed = 0, 0
 	local tried = {}
+	local zoneCooldown = {}
 
 	while AutoArrest.Active do
 		if not inTeam(player, POLICE_KEYS) then
@@ -1076,18 +993,32 @@ local function arrestLoop()
 			continue
 		end
 
+		refreshZones()
+
 		local list = {}
+		local zoneSkipped = 0
 		for _, plr in ipairs(Players:GetPlayers()) do
 			if plr ~= player and not tried[plr] and inTeam(plr, BIKER_KEYS) then
 				local root = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
-				if root and not inFailedZone(root.Position) and not looksSafe(plr) then
-					table.insert(list, { plr = plr, dist = (root.Position - myRoot.Position).Magnitude })
+				if root then
+					local cooling = zoneCooldown[plr] and zoneCooldown[plr] > os.clock()
+					if cooling or inRestrictedZone(root.Position) then
+						zoneSkipped = zoneSkipped + 1
+					elseif not inFailedZone(root.Position) and not looksSafe(plr) then
+						table.insert(list, { plr = plr, dist = (root.Position - myRoot.Position).Magnitude })
+					end
 				end
 			end
 		end
 		table.sort(list, function(a, b) return a.dist < b.dist end)
 
-		if #list == 0 then break end
+		if #list == 0 then
+			if zoneSkipped > 0 then
+				task.wait(1)
+				continue
+			end
+			break
+		end
 
 		local target = list[1].plr
 		tried[target] = true
@@ -1099,7 +1030,6 @@ local function arrestLoop()
 		end
 
 		teleportBehind(myRoot, tRoot)
-		extendPrompts(char0)
 		task.wait(0.2)
 
 		local tool = tryEquip()
@@ -1117,7 +1047,7 @@ local function arrestLoop()
 		local t0 = os.clock()
 		local lastEquip, lastTrigger = 0, 0
 		local equipTries = 0
-		local arrested, gaveUp = false, false
+		local arrested, gaveUp, enteredZone = false, false, false
 
 		while AutoArrest.Active and os.clock() - t0 < AutoArrest.Timeout do
 			if isArrested(target, char0) then
@@ -1130,7 +1060,12 @@ local function arrestLoop()
 			local mRoot = mChar and mChar:FindFirstChild("HumanoidRootPart")
 			if not (tRoot and mRoot) then break end
 
-			if (mRoot.Position - tRoot.Position).Magnitude > AutoArrest.Offset + 1.5 then
+			if inRestrictedZone(tRoot.Position) then
+				enteredZone = true
+				break
+			end
+
+			if AutoArrest.LockOn or (mRoot.Position - tRoot.Position).Magnitude > AutoArrest.Offset + 1.5 then
 				teleportBehind(mRoot, tRoot)
 			end
 
@@ -1149,7 +1084,6 @@ local function arrestLoop()
 				equipTries = 0
 				if now - lastTrigger > 0.4 then
 					lastTrigger = now
-					extendPrompts(char0)
 					local prompt = findPrompt(char0)
 					if prompt then
 						task.spawn(triggerPrompt, prompt)
@@ -1164,6 +1098,9 @@ local function arrestLoop()
 
 		if arrested then
 			done = done + 1
+		elseif enteredZone then
+			tried[target] = nil
+			zoneCooldown[target] = os.clock() + 10
 		elseif gaveUp then
 			if tRoot then
 				table.insert(failedZones, tRoot.Position)
@@ -1182,7 +1119,6 @@ local function arrestLoop()
 
 	AutoArrest.Running = false
 	AutoArrest.Active = false
-	pcall(function() ArrestToggle:Set(false) end)
 	Rayfield:Notify({
 		Title = "Auto Arrest",
 		Content = string.format("종료 - 성공 %d / 건너뜀·실패 %d", done, failed),
@@ -1195,14 +1131,23 @@ PoliceTab:CreateParagraph({
 	Content = "미완성",
 })
 
-ArrestToggle = PoliceTab:CreateToggle({
-	Name = "Auto Arrest",
-	CurrentValue = false,
-	Callback = function(v)
-		AutoArrest.Active = v
-		if v and not AutoArrest.Running then
-			task.spawn(arrestLoop)
+PoliceTab:CreateButton({
+	Name = "Auto Arrest (시작 / 실행 중 누르면 중지)",
+	Callback = function()
+		if AutoArrest.Running then
+			AutoArrest.Active = false
+			Rayfield:Notify({ Title = "Auto Arrest", Content = "중지함", Duration = 2 })
+			return
 		end
+
+		Hitbox.Enabled = false
+		for _, plr in ipairs(Players:GetPlayers()) do
+			restoreHitbox(plr)
+		end
+		pcall(function() HitboxToggle:Set(false) end)
+
+		AutoArrest.Active = true
+		task.spawn(arrestLoop)
 	end,
 })
 
@@ -1227,76 +1172,10 @@ PoliceTab:CreateSlider({
 })
 
 PoliceTab:CreateToggle({
-	Name = "프롬프트 인식 거리 늘리기",
+	Name = "Loop Teleport (계속 붙기)",
 	CurrentValue = true,
-	Flag = "ArrestExtendPrompt",
-	Callback = function(v)
-		AutoArrest.ExtendPrompt = v
-		if not v then
-			restorePromptDistance()
-		end
-	end,
-})
-
-PoliceTab:CreateButton({
-	Name = "주변 프롬프트 확인 (40 studs)",
-	Callback = function()
-		local myRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-		if not myRoot then return end
-
-		local lines = {}
-		for _, d in ipairs(Workspace:GetDescendants()) do
-			if d:IsA("ProximityPrompt") then
-				local par = d.Parent
-				local pos
-				if par and par:IsA("BasePart") then
-					pos = par.Position
-				elseif par and par:IsA("Attachment") then
-					pos = par.WorldPosition
-				end
-				if pos then
-					local dist = (pos - myRoot.Position).Magnitude
-					if dist <= 40 then
-						table.insert(lines, string.format(
-							"[%s] %s | 위치: %s | 거리 %.0f | 최대 %s | 홀드 %s",
-							d.ActionText ~= "" and d.ActionText or "(문구없음)",
-							d.Name,
-							d:GetFullName(),
-							dist,
-							tostring(d.MaxActivationDistance),
-							tostring(d.HoldDuration)
-						))
-					end
-				end
-			end
-		end
-
-		if #lines == 0 then
-			Rayfield:Notify({ Title = "프롬프트", Content = "주변 40 studs에 프롬프트 없음", Duration = 4 })
-			return
-		end
-
-		local text = table.concat(lines, "\n")
-		print(text)
-		if setclipboard then
-			pcall(setclipboard, text)
-		end
-		Rayfield:Notify({
-			Title = "프롬프트",
-			Content = #lines .. "개 발견 (F9 콘솔 출력" .. (setclipboard and ", 클립보드 복사됨)" or ")"),
-			Duration = 5,
-		})
-	end,
-})
-
-PoliceTab:CreateSlider({
-	Name = "프롬프트 인식 거리",
-	Range = {10, 60},
-	Increment = 5,
-	Suffix = "studs",
-	CurrentValue = 30,
-	Flag = "ArrestPromptDistance",
-	Callback = function(v) AutoArrest.PromptDistance = v end,
+	Flag = "ArrestLockOn",
+	Callback = function(v) AutoArrest.LockOn = v end,
 })
 
 local ViewTab = Window:CreateTab("PLAYER", 4483362458)
@@ -1372,21 +1251,25 @@ end
 Players.PlayerAdded:Connect(function() task.delay(1, refreshViewPlayers) end)
 Players.PlayerRemoving:Connect(function() task.delay(1, refreshViewPlayers) end)
 
-ViewTab:CreateToggle({
-	Name = "관전 켜기",
-	CurrentValue = false,
-	Callback = function(v)
-		View.Enabled = v
-		if v and not View.TargetName then
+ViewTab:CreateButton({
+	Name = "관전 (누르면 시작 / 다시 누르면 종료)",
+	Callback = function()
+		if View.Enabled then
+			View.Enabled = false
+			restoreView()
+			return
+		end
+
+		if not View.TargetName then
 			Rayfield:Notify({
 				Title = "View",
 				Content = "관전할 플레이어를 선택하세요",
 				Duration = 3,
 			})
+			return
 		end
-		if not v then
-			restoreView()
-		end
+
+		View.Enabled = true
 	end,
 })
 
@@ -1542,7 +1425,6 @@ local DEFAULT_SCRIPT_URL = "https://raw.githubusercontent.com/gyeongjuping/bunhw
 
 local ServerHop = {
 	Mode = "인원 적은 서버",
-	MinPlayers = 1,
 	Busy = false,
 	AutoReload = true,
 	ScriptURL = DEFAULT_SCRIPT_URL,
@@ -1634,8 +1516,7 @@ local function pickServer(list)
 		if srv.id ~= game.JobId
 			and type(srv.playing) == "number"
 			and type(srv.maxPlayers) == "number"
-			and srv.playing < srv.maxPlayers - 1
-			and srv.playing >= ServerHop.MinPlayers then
+			and srv.playing < srv.maxPlayers - 1 then
 			table.insert(candidates, srv)
 		end
 	end
@@ -1736,16 +1617,6 @@ ServerTab:CreateDropdown({
 	end,
 })
 
-ServerTab:CreateSlider({
-	Name = "최소 인원",
-	Range = {0, 15},
-	Increment = 1,
-	Suffix = "명",
-	CurrentValue = 1,
-	Flag = "HopMinPlayers",
-	Callback = function(v) ServerHop.MinPlayers = v end,
-})
-
 ServerTab:CreateSection("자동 재실행")
 
 ServerTab:CreateToggle({
@@ -1773,6 +1644,70 @@ ServerTab:CreateButton({
 		end)
 	end,
 })
+
+do
+	local playerGui = player:WaitForChild("PlayerGui")
+	local updating = false
+
+	local function changeText()
+		local team = player.Team
+		if not team then return end
+
+		for _, topda in ipairs(playerGui:GetDescendants()) do
+			if topda.Name == "topda" then
+				local background = topda:FindFirstChild("background", true)
+
+				if background then
+					local labels = {}
+
+					for _, obj in ipairs(background:GetDescendants()) do
+						if obj:IsA("TextLabel") then
+							table.insert(labels, obj)
+						end
+					end
+
+					if team.Name == "경찰 | police" then
+						if labels[1] then
+							labels[1].Text = "NaTroCul Police"
+						end
+						if labels[2] then
+							labels[2].Text = "Police System"
+						end
+					elseif team.Name == "폭주족 | biker" then
+						if labels[1] then
+							labels[1].Text = "NaTroCul Biker"
+						end
+						if labels[2] then
+							labels[2].Text = "Biker System"
+						end
+					end
+				end
+			end
+		end
+	end
+
+	local function scheduleChange(delayTime)
+		if updating then return end
+		updating = true
+		task.delay(delayTime, function()
+			updating = false
+			pcall(changeText)
+		end)
+	end
+
+	task.spawn(function()
+		task.wait(1)
+		pcall(changeText)
+	end)
+
+	player:GetPropertyChangedSignal("Team"):Connect(function()
+		scheduleChange(1)
+	end)
+
+	playerGui.DescendantAdded:Connect(function()
+		scheduleChange(0.5)
+	end)
+end
 
 local CreditsTab = Window:CreateTab("Credits", 4483362458)
 
