@@ -1668,17 +1668,17 @@ do
 
 					if team.Name == "경찰 | police" then
 						if labels[1] then
-							labels[1].Text = "NaTroCul Police"
+							labels[1].Text = "번화가돌기 GUI V3"
 						end
 						if labels[2] then
-							labels[2].Text = "Police System"
+							labels[2].Text = "경찰모드"
 						end
 					elseif team.Name == "폭주족 | biker" then
 						if labels[1] then
-							labels[1].Text = "NaTroCul Biker"
+							labels[1].Text = "번화가돌기 GUI V3"
 						end
 						if labels[2] then
-							labels[2].Text = "Biker System"
+							labels[2].Text = "폭주모드"
 						end
 					end
 				end
