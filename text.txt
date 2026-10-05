@@ -20,10 +20,15 @@ local player = Players.LocalPlayer
 
 local autoFarm = false
 local totalEarned = 0
+local totalArrests = 0  /* 추가: 체포 카운터 */
 local lastMoney = 0
 local scriptStartTime = os.time()
 local logs = {}
 local MAX_LOGS = 10
+
+/* 추가: 체포 감지용 */
+local arrestedPlayers = {}
+local lastArrestCheck = {}
 
 if player:FindFirstChild("leaderstats") and player.leaderstats:FindFirstChild("Money") then
 	lastMoney = player.leaderstats.Money.Value
@@ -47,6 +52,7 @@ local MoneyLabel   = MainTab:CreateLabel("돈: 로딩중...")
 local JobLabel     = MainTab:CreateLabel("직업: 로딩중...")
 local TimeLabel    = MainTab:CreateLabel("적용 시간: 0시간 0분")
 local EarnedLabel  = MainTab:CreateLabel("총 수익: 0")
+local ArrestLabel  = MainTab:CreateLabel("체포 횟수: 0")  /* 추가 */
 
 local LogParagraph
 
@@ -71,6 +77,53 @@ local function updateTimeLabel()
 	local hours = math.floor(elapsed / 3600)
 	local minutes = math.floor((elapsed % 3600) / 60)
 	TimeLabel:Set(string.format("적용 시간: %d시간 %d분", hours, minutes))
+end
+
+/* 추가: 체포 카운터 업데이트 함수 */
+local function addArrest(count)
+	count = count or 1
+	totalArrests = totalArrests + count
+	ArrestLabel:Set("체포 횟수: " .. tostring(totalArrests))
+	
+	Rayfield:Notify({
+		Title = "체포 성공",
+		Content = "총 " .. totalArrests .. "명 체포",
+		Duration = 2,
+	})
+end
+
+/* 추가: 체포 감지 로직 */
+local function isArrestedTeam(teamName)
+	if not teamName then return false end
+	local lower = string.lower(teamName)
+	return string.find(lower, "감옥") or string.find(lower, "jail") or 
+		   string.find(lower, "체포") or string.find(lower, "arrest") or
+		   string.find(lower, "구속") or string.find(lower, "prison")
+end
+
+local function checkArrest(targetPlr)
+	if targetPlr == player then return end
+	if not inTeam(targetPlr, BIKER_KEYS) then return end
+	
+	local char = targetPlr.Character
+	if not char then return end
+	
+	-- 팀 변경 감지 (폭주족 -> 감옥/경찰)
+	local currentTeam = targetPlr.Team and targetPlr.Team.Name or ""
+	local lastTeam = lastArrestCheck[targetPlr]
+	
+	if lastTeam and inTeam(targetPlr, BIKER_KEYS) == false then
+		-- 폭주족에서 다른 팀으로 변경됨
+		if isArrestedTeam(currentTeam) then
+			local lastTime = arrestedPlayers[targetPlr] or 0
+			if os.time() - lastTime > 5 then  -- 5초 내 중복 카운트 방지
+				arrestedPlayers[targetPlr] = os.time()
+				addArrest(1)
+			end
+		end
+	end
+	
+	lastArrestCheck[targetPlr] = currentTeam
 end
 
 task.spawn(function()
@@ -114,9 +167,20 @@ task.spawn(function()
 		JobLabel:Set("직업: " .. jobText)
 
 		updateTimeLabel()
+		
+		/* 추가: 체포 감지 체크 */
+		for _, plr in ipairs(Players:GetPlayers()) do
+			checkArrest(plr)
+		end
 
 		task.wait(0.3)
 	end
+end)
+
+/* 추가: 플레이어 나갈 때 정리 */
+Players.PlayerRemoving:Connect(function(plr)
+	lastArrestCheck[plr] = nil
+	arrestedPlayers[plr] = nil
 end)
 
 MainTab:CreateToggle({
@@ -472,247 +536,6 @@ local function getPlayerNames()
 	end
 	return names
 end
-
---[==[
-local MapTab = Window:CreateTab("GPS", 4483362458)
-
-local GPS = {
-	Enabled = false,
-	TargetName = nil,
-	ShowPath = true,
-	Waypoints = {},
-}
-
-local gpsGui = Instance.new("ScreenGui")
-gpsGui.Name = "GPS_GUI"
-gpsGui.ResetOnSpawn = false
-gpsGui.IgnoreGuiInset = true
-gpsGui.Enabled = false
-gpsGui.Parent = guiRoot
-
-local arrow = Instance.new("TextLabel")
-arrow.BackgroundTransparency = 1
-arrow.AnchorPoint = Vector2.new(0.5, 0.5)
-arrow.Position = UDim2.new(0.5, 0, 0.2, 0)
-arrow.Size = UDim2.fromOffset(80, 80)
-arrow.Font = Enum.Font.GothamBold
-arrow.Text = "▲"
-arrow.TextSize = 64
-arrow.TextColor3 = Color3.fromRGB(0, 200, 255)
-arrow.TextStrokeTransparency = 0
-arrow.Parent = gpsGui
-
-local infoLabel = Instance.new("TextLabel")
-infoLabel.BackgroundTransparency = 1
-infoLabel.AnchorPoint = Vector2.new(0.5, 0)
-infoLabel.Position = UDim2.new(0.5, 0, 0.2, 45)
-infoLabel.Size = UDim2.fromOffset(300, 40)
-infoLabel.Font = Enum.Font.GothamBold
-infoLabel.TextSize = 16
-infoLabel.TextColor3 = Color3.new(1, 1, 1)
-infoLabel.TextStrokeTransparency = 0
-infoLabel.Text = ""
-infoLabel.Parent = gpsGui
-
-local pathDots = {}
-
-local function clearDots()
-	for _, d in ipairs(pathDots) do
-		d:Destroy()
-	end
-	pathDots = {}
-end
-
-local function drawDots(points)
-	clearDots()
-	if not GPS.ShowPath then return end
-	local step = math.max(1, math.ceil(#points / 60))
-	for i = 1, #points, step do
-		local dot = Instance.new("SphereHandleAdornment")
-		dot.Adornee = Workspace.Terrain
-		dot.CFrame = CFrame.new(points[i] + Vector3.new(0, 1.5, 0))
-		dot.Radius = 0.6
-		dot.Color3 = Color3.fromRGB(0, 200, 255)
-		dot.Transparency = 0.2
-		dot.AlwaysOnTop = true
-		dot.ZIndex = 3
-		dot.Parent = espFolder
-		table.insert(pathDots, dot)
-	end
-end
-
-local function getTarget()
-	if not GPS.TargetName then return nil end
-	local plr = Players:FindFirstChild(GPS.TargetName)
-	local char = plr and plr.Character
-	local root = char and char:FindFirstChild("HumanoidRootPart")
-	return plr, root
-end
-
-task.spawn(function()
-	while true do
-		task.wait(2)
-		if GPS.Enabled then
-			local plr, targetRoot = getTarget()
-			local myChar = player.Character
-			local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
-
-			if targetRoot and myRoot then
-				local pts = {}
-				local ok = pcall(function()
-					local path = PathfindingService:CreatePath({
-						AgentRadius = 2,
-						AgentHeight = 5,
-						AgentCanJump = true,
-					})
-					path:ComputeAsync(myRoot.Position, targetRoot.Position)
-					if path.Status == Enum.PathStatus.Success then
-						for _, wp in ipairs(path:GetWaypoints()) do
-							table.insert(pts, wp.Position)
-						end
-					end
-				end)
-				if ok and #pts > 0 then
-					GPS.Waypoints = pts
-					drawDots(pts)
-				else
-					GPS.Waypoints = {}
-					clearDots()
-				end
-			else
-				GPS.Waypoints = {}
-				clearDots()
-			end
-		end
-	end
-end)
-
-RunService.RenderStepped:Connect(function()
-	if not GPS.Enabled then return end
-
-	local plr, targetRoot = getTarget()
-	local myChar = player.Character
-	local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
-	local cam = Workspace.CurrentCamera
-
-	if not (plr and targetRoot and myRoot and cam) then
-		infoLabel.Text = "대상을 찾을 수 없음"
-		return
-	end
-
-	local aim = targetRoot.Position
-	for _, pos in ipairs(GPS.Waypoints) do
-		local flatDiff = Vector3.new(pos.X - myRoot.Position.X, 0, pos.Z - myRoot.Position.Z)
-		if flatDiff.Magnitude > 8 then
-			aim = pos
-			break
-		end
-	end
-
-	local dir = Vector3.new(aim.X - myRoot.Position.X, 0, aim.Z - myRoot.Position.Z)
-	local look = Vector3.new(cam.CFrame.LookVector.X, 0, cam.CFrame.LookVector.Z)
-	local right = Vector3.new(cam.CFrame.RightVector.X, 0, cam.CFrame.RightVector.Z)
-
-	if dir.Magnitude > 0.1 and look.Magnitude > 0.01 and right.Magnitude > 0.01 then
-		dir = dir.Unit
-		look = look.Unit
-		right = right.Unit
-		arrow.Rotation = math.deg(math.atan2(dir:Dot(right), dir:Dot(look)))
-	end
-
-	local total = (targetRoot.Position - myRoot.Position).Magnitude
-	infoLabel.Text = string.format("%s  [%d m]", plr.DisplayName, total)
-end)
-
-
-local PlayerDropdown = MapTab:CreateDropdown({
-	Name = "길 안내할 플레이어",
-	Options = getPlayerNames(),
-	CurrentOption = {},
-	MultipleOptions = false,
-	Callback = function(selected)
-		local name = selected
-		if type(selected) == "table" then
-			name = selected[1]
-		end
-		if name and Players:FindFirstChild(name) then
-			GPS.TargetName = name
-		else
-			GPS.TargetName = nil
-		end
-	end,
-})
-
-task.defer(function()
-	pcall(function() PlayerDropdown:Set({}) end)
-	GPS.TargetName = nil
-end)
-
-local function refreshPlayers()
-	pcall(function() PlayerDropdown:Refresh(getPlayerNames()) end)
-end
-
-Players.PlayerAdded:Connect(function() task.delay(1, refreshPlayers) end)
-Players.PlayerRemoving:Connect(function() task.delay(1, refreshPlayers) end)
-
-MapTab:CreateButton({
-	Name = "플레이어 목록 새로고침",
-	Callback = refreshPlayers,
-})
-
-MapTab:CreateButton({
-	Name = "현상금 1위 폭주족 선택",
-	Callback = function()
-		local best, bestVal = nil, -1
-		for _, plr in ipairs(Players:GetPlayers()) do
-			if plr ~= player and inTeam(plr, BIKER_KEYS) then
-				local b = getBounty(plr)
-				if type(b) == "number" and b > bestVal then
-					best, bestVal = plr, b
-				end
-			end
-		end
-		if best then
-			GPS.TargetName = best.Name
-			pcall(function() PlayerDropdown:Set({ best.Name }) end)
-			Rayfield:Notify({
-				Title = "GPS",
-				Content = best.DisplayName .. " (현상금 " .. fmtNum(bestVal) .. ")",
-				Duration = 3,
-			})
-		else
-			Rayfield:Notify({
-				Title = "GPS",
-				Content = "현상금이 있는 폭주족이 없음",
-				Duration = 3,
-			})
-		end
-	end,
-})
-
-MapTab:CreateToggle({
-	Name = "GPS 켜기",
-	CurrentValue = false,
-	Callback = function(v)
-		GPS.Enabled = v
-		gpsGui.Enabled = v
-		if not v then
-			GPS.Waypoints = {}
-			clearDots()
-		end
-	end,
-})
-
-MapTab:CreateToggle({
-	Name = "경로 점 표시",
-	CurrentValue = true,
-	Flag = "GPSPath",
-	Callback = function(v)
-		GPS.ShowPath = v
-		if not v then clearDots() end
-	end,
-})
-]==]
 
 local ProximityPromptService = game:GetService("ProximityPromptService")
 PoliceTab:CreateSection("Instant Cuff")
@@ -1098,6 +921,8 @@ local function arrestLoop()
 
 		if arrested then
 			done = done + 1
+			/* 추가: Auto Arrest 성공 시 체포 카운트 증가 */
+			addArrest(1)
 		elseif enteredZone then
 			tried[target] = nil
 			zoneCooldown[target] = os.clock() + 10
@@ -1668,17 +1493,17 @@ do
 
 					if team.Name == "경찰 | police" then
 						if labels[1] then
-							labels[1].Text = "번화가돌기 GUI V3"
+							labels[1].Text = "NaTroCul Police"
 						end
 						if labels[2] then
-							labels[2].Text = "경찰모드"
+							labels[2].Text = "Police System"
 						end
 					elseif team.Name == "폭주족 | biker" then
 						if labels[1] then
-							labels[1].Text = "번화가돌기 GUI V3"
+							labels[1].Text = "NaTroCul Biker"
 						end
 						if labels[2] then
-							labels[2].Text = "폭주모드"
+							labels[2].Text = "Biker System"
 						end
 					end
 				end
